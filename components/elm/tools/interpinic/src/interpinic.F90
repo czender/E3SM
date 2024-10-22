@@ -39,11 +39,13 @@ module interpinic
   integer :: nlevsno1       ! maximum number of snow levels plus one
   integer :: nlevlak        ! number of lake levels
   integer :: nlevtot        ! number of soil and snow levels
-  integer :: nlevtot_o       ! number of soil and snow levels on output file
-  integer :: nlevgrnd        ! number of soil levels
-  integer :: nlevgrnd_o      ! number of soil levels on output file
+  integer :: nlevtot_o      ! number of soil and snow levels on output file
+  integer :: nlevgrnd       ! number of soil levels
+  integer :: nlevgrnd_o     ! number of soil levels on output file
   integer :: nlevcan        ! number of canopy layers
   integer :: nlevmon        ! number of months
+  integer :: nlevmec        ! number of MECs
+  integer :: nlevmec_o      ! number of MECs in output file
 
   integer :: numpfts        ! input file number of pfts 
   integer :: numpftso       ! output file number of pfts 
@@ -65,7 +67,7 @@ module interpinic
   real(r8), parameter :: spval = 1.e36_r8 ! special value for missing data (ocean)
   real(r8), parameter :: deg2rad = SHR_CONST_PI/180._r8
   real(r8), parameter :: re = SHR_CONST_REARTH
-  ! These types need to agree with the types in clm_varcon.F90 in the main CLM model code
+  ! These types need to agree with the types in elm_varcon.F90 in the main ELM model code
   integer,  parameter :: croptype     = 15
   integer,  parameter :: istcrop      = 2
   integer,  parameter :: istsoil      = 1
@@ -119,9 +121,10 @@ contains
     integer :: dimidsno            ! netCDF dimension id snow depth
     integer :: dimidsno1           ! netCDF dimension id snow depth plus one
     integer :: dimidtot            ! netCDF dimension id total
-    integer :: dimidgrnd            ! netCDF dimension id ground
+    integer :: dimidgrnd           ! netCDF dimension id ground
     integer :: dimidrad            ! netCDF dimension id numrad
     integer :: dimidcan            ! netCDF dimension id levcan
+    integer :: dimidmec            ! netCDF dimension id MEC
     integer :: dimidmon            ! netCDF dimension id month
     integer :: dimidrtmlat         ! netCDF dimension id rtmlat
     integer :: dimidrtmlon         ! netCDF dimension id rtmlon
@@ -200,7 +203,7 @@ contains
           stop
        end if
     else
-       write (6,*) 'levsno1 dimension does NOT exist on the input dataset'
+       write (6,*) 'levsno1 dimension does NOT exist in the input dataset'
        dimidsno1 = -9999
        nlevsno1  = -9999
     end if
@@ -216,7 +219,7 @@ contains
           stop
        end if
     else
-       write (6,*) 'levcan dimension does NOT exist on the input dataset'
+       write (6,*) 'levcan dimension does NOT exist in the input dataset'
        dimidcan = -9999
        nlevcan  = -9999
     end if
@@ -245,9 +248,39 @@ contains
           end if
        end if
     else
-       write (6,*) 'month dimension does NOT exist on the input dataset'
+       write (6,*) 'month dimension does NOT exist in the input dataset'
        dimidmon = -9999
        nlevmon  = -9999
+    end if
+
+    ret = nf90_inq_dimid(ncidi, "glc_nec", dimidmec)
+    if (ret == NF90_NOERR) then
+       call check_ret (nf90_inquire_dimension(ncidi, dimidmec, len=nlevmec))
+
+       ! Restart files may include Multiple Elevation Classes (MECs)
+       ! It is never necessary that both datasets contain MEC dimension
+       ! However, currently interpinic on supports interpolating from no MEC->no MEC and MEC->no MEC
+       ! Interpolating MEC->MEC or no MEC->MEC is not supported
+       ! Warn rather than die when input has MEC and output does not
+
+       ret = nf90_inq_dimid(ncido, "glc_nec", dimid )
+       if ( ret == nf_ebaddim ) then
+          write (6,*) 'info: input has "glc_nec" dimension (i.e., MECs) and output does not'
+          write (6,*) 'info: interpolation of MEC variables is under development'
+       else
+          call check_ret (nf90_inquire_dimension(ncido, dimid, len=nlevmec_o))
+          if (nlevmec_o == nlevmec) then
+             write (6,*) 'warning: interpolation of MEC variables not supported, continuing anyway'
+          else
+             write (6,*) 'error: input and output nlevmec values disagree'
+             write (6,*) 'input nlevmec = ',nlevmec,' output nlevmec = ',nlevmec_o
+             stop
+          end if
+       end if
+    else
+       write (6,*) 'MEC dimension does NOT exist on the input dataset'
+       dimidmec = -9999
+       nlevmec  = -9999
     end if
 
     call check_ret (nf90_inq_dimid(ncidi, "levlak", dimidlak ))
