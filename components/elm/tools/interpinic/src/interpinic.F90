@@ -255,30 +255,33 @@ contains
 
     ret = nf90_inq_dimid(ncidi, "glc_nec", dimidmec)
     if (ret == NF90_NOERR) then
+       write (6,*) 'info: input dataset contains Multiple Elevation Class (MEC) dimension'
        call check_ret (nf90_inquire_dimension(ncidi, dimidmec, len=nlevmec))
 
        ! Restart files may include Multiple Elevation Classes (MECs)
        ! It is never necessary that both datasets contain MEC dimension
-       ! However, currently interpinic on supports interpolating from no MEC->no MEC and MEC->no MEC
-       ! Interpolating MEC->MEC or no MEC->MEC is not supported
+       ! However, currently interpinic only fully supports interpolating no MEC->no MEC
+       ! Interpolating MEC->no MEC is under development
+       ! Interpolating MEC->MEC completes, although the results have not been thoroughly audited
+       ! Interpolating no MEC->MEC is not supported
        ! Warn rather than die when input has MEC and output does not
 
        ret = nf90_inq_dimid(ncido, "glc_nec", dimid )
        if ( ret == nf_ebaddim ) then
           write (6,*) 'info: input has "glc_nec" dimension (i.e., MECs) and output does not'
-          write (6,*) 'info: interpolation of MEC variables is under development'
+          write (6,*) 'info: interpolation of MEC variables to no-MEC dataset is under development'
        else
           call check_ret (nf90_inquire_dimension(ncido, dimid, len=nlevmec_o))
           if (nlevmec_o == nlevmec) then
-             write (6,*) 'warning: interpolation of MEC variables not supported, continuing anyway'
+             write (6,*) 'warning: interpolating MEC variables to MEC datasets has not been audited, continuing anyway'
           else
              write (6,*) 'error: input and output nlevmec values disagree'
-             write (6,*) 'input nlevmec = ',nlevmec,' output nlevmec = ',nlevmec_o
+             write (6,*) 'input nlevmec = ',nlevmec,' != output nlevmec = ',nlevmec_o
              stop
           end if
        end if
     else
-       write (6,*) 'MEC dimension does NOT exist on the input dataset'
+       write (6,*) 'info: input dataset does NOT contain Multiple Elevation Classes (MECs)'
        dimidmec = -9999
        nlevmec  = -9999
     end if
@@ -384,7 +387,7 @@ contains
     call addglobal (ncido, cmdline)
 
     ! Read input initial data and write output initial data
-    ! Only examing the snow interfaces above zi=0 => zisno and zsno have
+    ! Only examine the snow interfaces above zi=0 => zisno and zsno have
     ! the same level dimension below
 
     write(6,*)'reading in initial dataset'
@@ -828,7 +831,7 @@ contains
     implicit none
 
     ! ------------------------ arguments ---------------------------------
-    integer , intent(in)  :: ncidi              ! input netCdf id
+    integer , intent(in)  :: ncidi              ! input netCDF id
     integer , intent(in)  :: ncido              ! output netCDF id  
     integer , intent(out) :: colindx(:)         ! n = colindx(no) 
     ! --------------------------------------------------------------------
