@@ -21,7 +21,8 @@ module interpinic
   logical, public  :: override_missing = .true. ! if you want to override missing
                                                 ! types with closest bare-soil
                                                 ! Otherwise it will abort.
-
+                                                ! NB: Must be true to successfully interpolate
+                                                ! from MEC to non-MEC datasets
   ! Private methods
 
   private :: interp_ml_real
@@ -69,8 +70,10 @@ module interpinic
   real(r8), parameter :: re = SHR_CONST_REARTH
   ! These types need to agree with the types in elm_varcon.F90 in the main ELM model code
   integer,  parameter :: croptype     = 15
-  integer,  parameter :: istcrop      = 2
   integer,  parameter :: istsoil      = 1
+  integer,  parameter :: istcrop      = 2
+  integer,  parameter :: istlice      = 3 ! Landice landunit (plain, no MEC)
+  integer,  parameter :: istlmec      = 4 ! Multiple elevation class (MEC) landice landunit 
   integer,  parameter :: baresoil     = 0
   integer,  parameter :: nonurbcol    = 1
 
@@ -82,6 +85,11 @@ module interpinic
 
   logical, save :: vertinterp = .false.
 
+  integer , allocatable, save :: ctypci(:)      ! Column type of column input
+  integer , allocatable, save :: ctypco(:)      ! Column type of column output
+  integer , allocatable, save :: ltypci(:)      ! Landunit type of column input
+  integer , allocatable, save :: ltypco(:)      ! Landunit type of column output
+ 
   SAVE
 
 contains
@@ -268,6 +276,7 @@ contains
 
        ret = nf90_inq_dimid(ncido, "glc_nec", dimid )
        if ( ret == nf_ebaddim ) then
+          nlevmec_o = 0
           write (6,*) 'info: input has "glc_nec" dimension (i.e., MECs) and output does not'
           write (6,*) 'info: interpolation of MEC variables to no-MEC dataset is under development'
        else
@@ -283,7 +292,7 @@ contains
     else
        write (6,*) 'info: input dataset does NOT contain Multiple Elevation Classes (MECs)'
        dimidmec = -9999
-       nlevmec  = -9999
+       nlevmec  = 0
     end if
 
     call check_ret (nf90_inq_dimid(ncidi, "levlak", dimidlak ))
@@ -376,9 +385,28 @@ contains
     
     ! Get list of variables
     call check_ret (nf90_inquire(ncidi, nVariables=nvars ))
-    !
-    ! OK now, open the output file for writing
-    !
+
+    ! Interpolation algorithm for every variable defined on columns
+    ! depends on ctypci, ctypco, ltypci, ltypco when MECs are present
+    ! Pre-fill those arrays once rather than re-reading in variable loop
+    if (nlevmec > 0) then
+       allocate (ctypci(numcols))
+       allocate (ctypco(numcolso))
+       allocate (ltypci(numcols))
+       allocate (ltypco(numcolso))
+
+       call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityp', varid ))
+       call check_ret(nf90_get_var (ncidi, varid, ctypci))
+       call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityplun', varid ))
+       call check_ret(nf90_get_var (ncidi, varid, ltypci))
+
+       call check_ret(nf90_inq_varid (ncido, 'cols1d_ityp', varid ))
+       call check_ret(nf90_get_var (ncido, varid, ctypco))
+       call check_ret(nf90_inq_varid (ncido, 'cols1d_ityplun', varid ))
+       call check_ret(nf90_get_var (ncido, varid, ltypco))
+    end if
+    
+    ! Open the output file for writing
     call check_ret(nf90_close( ncido))
 
     ! Allow any format for output dataset
@@ -616,6 +644,14 @@ contains
        end if
        call shr_sys_flush(6)
     end do
+
+    ! Free memory
+    if (nlevmec > 0) then
+       deallocate (ctypci)
+       deallocate (ctypco)
+       deallocate (ltypci)
+       deallocate (ltypco)
+    end if
 
     ! Close input and output files
 
@@ -933,9 +969,24 @@ contains
           do n = 1, numcols
              calcmin = .false.
              if (wti(n) > 0.0_r8) then
+                ! Input column is contender for nearest-to-output if...
                 if (typei_urb(n) == nonurbcol) then
+                   ! ...input column type is vegetated or bare soil
+                   ! and input and output landunits agree
                    if (typei(n) == typeo(no)) calcmin = .true.
+                else if (typeo(no) == istlice) then
+                   ! ...output landunit type is non-MEC glacier
+                   ! and input landunit type is any glacier
+                   if (typei(n) == istlice .or. typei(n) == istlmec) calcmin = .true.
+                else if (typeo(no) == istlmec) then
+                   ! ...output landunit type is MEC glacier
+                   ! and input column type is same MEC
+                   if (typei_urb(n) == typeo_urb(no)) calcmin = .true.
                 else
+                   ! Input column type is anything else (not vegetated or bare soil)
+                   ! and output landunit type is not glaciated (MEC or non-MEC)
+                   ! and input and output landunit types agree
+                   ! and input and output column types agree
                    if (typei(n) == typeo(no) .and. typei_urb(n) == typeo_urb(no)) calcmin = .true.
                 end if
              end if
@@ -943,6 +994,10 @@ contains
                 dy = abs(lato(no)-lati(n))*re
                 dx = abs(lono(no)-loni(n))*re * 0.5_r8*(cos_lato(no)+cos_lati(n))
                 dist = dx*dx + dy*dy
+                ! NB: Condition "<" (less-than) here rather than "<=" (less-than-or-equal-to)
+                ! means that first column to contend from a given input gridcell "wins".
+                ! MEC column order on-disk and in-memory is from lowest-to-highest elevation class
+                ! Implication for MEC interpolation is that "ties" go to lowest elevation MEC column
                 if ( dist < distmin )then
                    distmin = dist
                    nmin = n
@@ -954,7 +1009,9 @@ contains
           if ( override_missing ) then
              if ( distmin == spval )then
                 do n = 1, numcols
+                   ! Input column is contender for nearest-to-output if...
                    if (wti(n) > 0._r8 .and. typei(n)==istsoil) then
+                      ! ...input landunit type is vegetated or bare soil
                       dy = abs(lato(no)-lati(n))*re
                       dx = abs(lono(no)-loni(n))*re * 0.5_r8*(cos_lato(no)+cos_lati(n))
                       dist = dx*dx + dy*dy
@@ -1323,12 +1380,38 @@ contains
 
     if ( nvec == numcols )then
 
-       do no = 1, nveco
-          if (wto(no)>0._r8) then
-             n = colindx(no)
-             if (n > 0) rbufslo(no) = rbufsli(n)
-          end if  
-       end do
+       if (nlevmec == 0) then
+
+          ! Input file does not contain MECs so nearest-neighbor algorithm is straightforward 
+          do no = 1, nveco
+             if (wto(no)>0._r8) then
+                n = colindx(no)
+                if (n > 0) rbufslo(no) = rbufsli(n)
+             end if
+          end do
+
+       else if (nlevmec > 0) then
+
+          ! Input file contains MECs so nearest-neighbor algorithm depends on column-type
+          do no = 1, nveco
+             if (wto(no)>0._r8) then
+                n = colindx(no)
+                if (ltypco(no) /= istlice .and. ltypco(no) /= istlmec) then
+                   ! If output column is in non-glaciated landunit then proceed normally
+                   if (n > 0) rbufslo(no) = rbufsli(n)
+                else if (ltypco(no) == istlice) then
+                   ! Output column is plain glacier (no MEC)
+                   if (n > 0) rbufslo(no) = rbufsli(n)
+                else if (ltypco(no) == istlmec) then
+                   ! Output column is glacier with MECs
+                   ! Interpinic used default algorithm for this case until 20241025
+                   ! However, default algorithm is suspect and probably wrong
+                   if (n > 0) rbufslo(no) = rbufsli(n)
+                end if
+             end if
+          end do
+
+       end if
 
     else if ( nvec == numldus )then
 
