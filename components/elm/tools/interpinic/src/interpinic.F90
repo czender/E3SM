@@ -1217,11 +1217,14 @@ contains
     integer :: ret                              ! netCDF return code
     integer :: nlev_diff
     integer, parameter :: nlev_inactive = 5
+    real(r8) :: cwtci_sum                       ! Cumulative column weight of column input
+    real(r8), allocatable :: cwvvtci_sum(:)     ! Cumulative weighted variable value of column input
     ! --------------------------------------------------------------------
 
     allocate (rbufmli(nlev,nvec))
     allocate (rbufmlo(nlev_o,nveco))
     allocate (wto(nveco))
+    allocate (cwvvtci_sum(nlev))
 
     if (nveco == numcolso) then
        call check_ret(nf90_inq_varid(ncido, 'cols1d_wtxy', varid))
@@ -1238,12 +1241,37 @@ contains
 
     if (nlev == nlev_o) then
        if (nvec == numcols) then
-          do no = 1, nveco
-             if (wto(no)>0._r8) then
-                n = colindx(no)
-                if (n > 0) rbufmlo(:,no) = rbufmli(:,n)
-             end if
-          end do
+
+          ! Following section is vectorized version of analogous section in interp_sl_real()
+          ! Explanatory comments omitted here are still in interp_sl_real() 
+          if (nlevmec == nlevmec_o) then
+             do no = 1, nveco
+                if (wto(no)>0._r8) then
+                   n = colindx(no)
+                   if (n > 0) rbufmlo(:,no) = rbufmli(:,n)
+                end if
+             end do
+          else if (nlevmec > 0) then
+             do no = 1, nveco
+                if (wto(no)>0._r8) then
+                   n = colindx(no)
+                   if (n > 0) rbufmlo(:,no) = rbufmli(:,n)
+                   if (ltypco(no) == istlice) then
+                      cwtci_sum = 0.0_r8
+                      cwvvtci_sum(:) = 0.0_r8
+                      do while ( ltypci(n) == istlmec )
+                         cwtci_sum = cwtci_sum + cwtci(n)
+                         cwvvtci_sum(:) = cwvvtci_sum(:) + rbufmli(:,n) * cwtci(n)
+                         n=n+1
+                      end do
+                      if (cwtci_sum > 0.0_r8) then
+                         rbufmlo(:,no) = cwvvtci_sum(:) / cwtci_sum
+                      end if
+                   end if
+                end if
+             end do
+          end if
+             
        else if (nvec == numpfts) then
           do no = 1, nveco
              if (wto(no)>0._r8) then
@@ -1263,6 +1291,7 @@ contains
           stop
        end if
        if (nvec == numcols) then
+          ! fxm: Modify this section to account for MEC glaciers->plain glaciers
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
@@ -1294,6 +1323,7 @@ contains
     deallocate(rbufmli)
     deallocate(rbufmlo)
     deallocate(wto)
+    deallocate(cwvvtci_sum)
 
   end subroutine interp_ml_real
 
