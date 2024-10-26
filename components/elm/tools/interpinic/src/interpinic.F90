@@ -1010,7 +1010,7 @@ contains
              end if
           end do
              
-          ! If input does not have output column type than use closest soil column if override is set 
+          ! If input does not have output column type then use closest soil column if override is set 
           if ( override_missing ) then
              if ( distmin == spval )then
                 do n = 1, numcols
@@ -1387,7 +1387,8 @@ contains
     call check_ret(nf90_inq_varid( ncido, varname, varid))
     call check_ret(nf90_get_var( ncido, varid, rbufslo))
 
-    write(*,*) 'dbg: interp_sl_real() processing variable ', trim(varname), '...' 
+    !    write(*,*) 'dbg: interp_sl_real() processing variable ', trim(varname), '...' 
+    !flush(6)
     
     if ( nvec == numcols )then
 
@@ -1410,10 +1411,13 @@ contains
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
-                if (ltypco(no) /= istlice) then
-                   ! If output column is in non-glaciated landunit then proceed normally
-                   if (n > 0) rbufslo(no) = rbufsli(n)
-                else if (ltypco(no) == istlice) then
+                if (n == 0) then
+                   call abort()
+                end if
+                ! Initialize output with normal nearest neighbor algorithm
+                if (n > 0) rbufslo(no) = rbufsli(n)
+                ! If output column is in glaciated landunit then overwrite with area-weighted average over MECs
+                if (ltypco(no) == istlice) then
                    ! Output column is plain glacier (no MEC)
                    ! Algorithm: Construct plain glacier output as
                    ! area-weighted average over all input MECs.
@@ -1433,22 +1437,20 @@ contains
                    wvvci=0.0_r8
                    mec_nbr=0
                    do while ( ltypci(n) == istlmec )
-                      if (cwtci(n) > 0._r8) then
-                         cwtci_sum = cwtci_sum + cwtci(n)
-                         cwvvtci_sum = cwvvtci_sum + rbufsli(n) * cwtci(n)
-                         n=n+1
-                         mec_nbr=mec_nbr+1
-                      end if
+                      cwtci_sum = cwtci_sum + cwtci(n)
+                      cwvvtci_sum = cwvvtci_sum + rbufsli(n) * cwtci(n)
+                      n=n+1
+                      mec_nbr=mec_nbr+1
                    end do
                    if (mec_nbr == 0) then
                       call abort()
                    end if
                    if (cwtci_sum > 0.0_r8) then
                       wvvci=cwvvtci_sum/cwtci_sum
+                      rbufslo(no) = wvvci
                    else
                       call abort()
                    end if
-                   if (n > 0) rbufslo(no) = wvvci
                 end if
              end if
           end do
