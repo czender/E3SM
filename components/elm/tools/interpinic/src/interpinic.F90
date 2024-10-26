@@ -89,7 +89,8 @@ module interpinic
   integer , allocatable, save :: ctypco(:)      ! Column type of column output
   integer , allocatable, save :: ltypci(:)      ! Landunit type of column input
   integer , allocatable, save :: ltypco(:)      ! Landunit type of column output
- 
+  real(r8), allocatable :: cwtci(:)             ! Column weight of column input
+  
   SAVE
 
 contains
@@ -387,16 +388,19 @@ contains
     call check_ret (nf90_inquire(ncidi, nVariables=nvars ))
 
     ! Interpolation algorithm for every variable defined on columns
-    ! depends on ctypci, ctypco, ltypci, ltypco when MECs are present
+    ! depends on ctypci, ctypco, cwtci ltypci, ltypco when MECs are present
     ! Pre-fill those arrays once rather than re-reading in variable loop
     if (nlevmec > 0) then
        allocate (ctypci(numcols))
        allocate (ctypco(numcolso))
+       allocate (cwtci(numcols))
        allocate (ltypci(numcols))
        allocate (ltypco(numcolso))
 
        call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityp', varid ))
        call check_ret(nf90_get_var (ncidi, varid, ctypci))
+       call check_ret(nf90_inq_varid (ncidi, 'cols1d_wtxy', varid ))
+       call check_ret(nf90_get_var (ncidi, varid, cwtci))
        call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityplun', varid ))
        call check_ret(nf90_get_var (ncidi, varid, ltypci))
 
@@ -649,6 +653,7 @@ contains
     if (nlevmec > 0) then
        deallocate (ctypci)
        deallocate (ctypco)
+       deallocate (cwtci)
        deallocate (ltypci)
        deallocate (ltypco)
     end if
@@ -1334,10 +1339,14 @@ contains
     real(r8), allocatable :: rbufsli (:)   ! input array
     real(r8), allocatable :: rbufslo (:)   ! output array
     integer :: ret                         ! NetCDF return code
+    integer :: mec_nbr                     ! Number of MECs contributing to current output column
     integer :: num                         ! number of gridcells NOT normalized
     integer :: numgrdso                    ! number of gridcells on output grid
     logical :: htop_var                    ! If variable name is == htop/hbot
     logical :: fpcgrid_var                 ! If variable name is == fpcgrid
+    real(r8) :: cwtci_sum                  ! Cumulative column weight of column input
+    real(r8) :: cwvvtci_sum                ! Cumulative weighted variable value of column input
+    real(r8) :: wvvci                      ! Weighted variable value of column input
     ! --------------------------------------------------------------------
 
     allocate (rbufsli(nvec))
@@ -1378,11 +1387,15 @@ contains
     call check_ret(nf90_inq_varid( ncido, varname, varid))
     call check_ret(nf90_get_var( ncido, varid, rbufslo))
 
+    write(*,*) 'dbg: interp_sl_real() processing variable ', trim(varname), '...' 
+    
     if ( nvec == numcols )then
 
-       if (nlevmec == 0) then
-
-          ! Input file does not contain MECs so nearest-neighbor algorithm is straightforward 
+       if (nlevmec == nlevmec_o) then
+          ! Both files either lack MECs or contain the same number of MECs
+          ! Either way, nearest-neighbor algorithm is straightforward
+          ! NB: findMinDistCol() selection algorithm guarantees that
+          ! nearest input column is same MEC as output column
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
@@ -1392,21 +1405,50 @@ contains
 
        else if (nlevmec > 0) then
 
-          ! Input file contains MECs so nearest-neighbor algorithm depends on column-type
+          ! Input file contains MECs and output does not
+          ! Nearest-neighbor algorithm depends on column-type
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
-                if (ltypco(no) /= istlice .and. ltypco(no) /= istlmec) then
+                if (ltypco(no) /= istlice) then
                    ! If output column is in non-glaciated landunit then proceed normally
                    if (n > 0) rbufslo(no) = rbufsli(n)
                 else if (ltypco(no) == istlice) then
                    ! Output column is plain glacier (no MEC)
-                   if (n > 0) rbufslo(no) = rbufsli(n)
-                else if (ltypco(no) == istlmec) then
-                   ! Output column is glacier with MECs
-                   ! Interpinic used default algorithm for this case until 20241025
-                   ! However, default algorithm is suspect and probably wrong
-                   if (n > 0) rbufslo(no) = rbufsli(n)
+                   ! Algorithm: Construct plain glacier output as
+                   ! area-weighted average over all input MECs.
+                   ! findMinDistCol() selection algorithm guarantees that
+                   ! nearest input column is lowest elevation MEC of nearest
+                   ! glaciated landunit.
+                   ! An unknown number of higher elevation MECs from same
+                   ! landunit could (and likely do) follow the first MEC.
+                   ! Sanity check:
+                   if (ltypci(n) /= istlmec) then
+                      call abort()
+                   end if
+
+                   ! Construct weighted output value in loop over input MEC landunit
+                   cwtci_sum=0.0_r8
+                   cwvvtci_sum=0.0_r8
+                   wvvci=0.0_r8
+                   mec_nbr=0
+                   do while ( ltypci(n) == istlmec )
+                      if (cwtci(n) > 0._r8) then
+                         cwtci_sum = cwtci_sum + cwtci(n)
+                         cwvvtci_sum = cwvvtci_sum + rbufsli(n) * cwtci(n)
+                         n=n+1
+                         mec_nbr=mec_nbr+1
+                      end if
+                   end do
+                   if (mec_nbr == 0) then
+                      call abort()
+                   end if
+                   if (cwtci_sum > 0.0_r8) then
+                      wvvci=cwvvtci_sum/cwtci_sum
+                   else
+                      call abort()
+                   end if
+                   if (n > 0) rbufslo(no) = wvvci
                 end if
              end if
           end do
