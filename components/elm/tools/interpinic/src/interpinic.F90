@@ -85,14 +85,10 @@ module interpinic
 
   logical, save :: vertinterp = .false.
 
-  integer , allocatable, save :: ctypci(:)      ! Column type of column input
-  integer , allocatable, save :: ctypco(:)      ! Column type of column output
   integer , allocatable, save :: ltypci(:)      ! Landunit type of column input
   integer , allocatable, save :: ltypco(:)      ! Landunit type of column output
-  real(r8), allocatable :: cwtci(:)             ! Column weight of column input
+  real(r8), allocatable, save :: cwtci(:)       ! Column weight of column input
   
-  SAVE
-
 contains
 
   !=======================================================================
@@ -388,24 +384,17 @@ contains
     call check_ret (nf90_inquire(ncidi, nVariables=nvars ))
 
     ! Interpolation algorithm for every variable defined on columns
-    ! depends on ctypci, ctypco, cwtci ltypci, ltypco when MECs are present
+    ! depends on cwtci ltypci, ltypco when MECs are present
     ! Pre-fill those arrays once rather than re-reading in variable loop
     if (nlevmec > 0) then
-       allocate (ctypci(numcols))
-       allocate (ctypco(numcolso))
        allocate (cwtci(numcols))
        allocate (ltypci(numcols))
        allocate (ltypco(numcolso))
 
-       call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityp', varid ))
-       call check_ret(nf90_get_var (ncidi, varid, ctypci))
        call check_ret(nf90_inq_varid (ncidi, 'cols1d_wtxy', varid ))
        call check_ret(nf90_get_var (ncidi, varid, cwtci))
        call check_ret(nf90_inq_varid (ncidi, 'cols1d_ityplun', varid ))
        call check_ret(nf90_get_var (ncidi, varid, ltypci))
-
-       call check_ret(nf90_inq_varid (ncido, 'cols1d_ityp', varid ))
-       call check_ret(nf90_get_var (ncido, varid, ctypco))
        call check_ret(nf90_inq_varid (ncido, 'cols1d_ityplun', varid ))
        call check_ret(nf90_get_var (ncido, varid, ltypco))
     end if
@@ -651,8 +640,6 @@ contains
 
     ! Free memory
     if (nlevmec > 0) then
-       deallocate (ctypci)
-       deallocate (ctypco)
        deallocate (cwtci)
        deallocate (ltypci)
        deallocate (ltypco)
@@ -1339,14 +1326,12 @@ contains
     real(r8), allocatable :: rbufsli (:)   ! input array
     real(r8), allocatable :: rbufslo (:)   ! output array
     integer :: ret                         ! NetCDF return code
-    integer :: mec_nbr                     ! Number of MECs contributing to current output column
     integer :: num                         ! number of gridcells NOT normalized
     integer :: numgrdso                    ! number of gridcells on output grid
     logical :: htop_var                    ! If variable name is == htop/hbot
     logical :: fpcgrid_var                 ! If variable name is == fpcgrid
     real(r8) :: cwtci_sum                  ! Cumulative column weight of column input
     real(r8) :: cwvvtci_sum                ! Cumulative weighted variable value of column input
-    real(r8) :: wvvci                      ! Weighted variable value of column input
     ! --------------------------------------------------------------------
 
     allocate (rbufsli(nvec))
@@ -1387,16 +1372,14 @@ contains
     call check_ret(nf90_inq_varid( ncido, varname, varid))
     call check_ret(nf90_get_var( ncido, varid, rbufslo))
 
-    !    write(*,*) 'dbg: interp_sl_real() processing variable ', trim(varname), '...' 
-    !flush(6)
-    
     if ( nvec == numcols )then
 
        if (nlevmec == nlevmec_o) then
           ! Both files either lack MECs or contain the same number of MECs
-          ! Either way, nearest-neighbor algorithm is straightforward
+          ! Either way, apply default nearest-neighbor algorithm
           ! NB: findMinDistCol() selection algorithm guarantees that
-          ! nearest input column is same MEC as output column
+          ! nearest input column is same MEC as output column so nothing
+          ! is lost when input<->output MEC columns are 1-to-1
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
@@ -1411,45 +1394,30 @@ contains
           do no = 1, nveco
              if (wto(no)>0._r8) then
                 n = colindx(no)
-                if (n == 0) then
-                   call abort()
-                end if
-                ! Initialize output with normal nearest neighbor algorithm
+                ! Initialize output with default nearest neighbor algorithm
+                ! This value will be used for all column types except glaciated,
+                ! and for glaciated columns where input area weights sum to zero
                 if (n > 0) rbufslo(no) = rbufsli(n)
-                ! If output column is in glaciated landunit then overwrite with area-weighted average over MECs
+                ! Overwrite default output with area-weighted average in glaciated landunits
                 if (ltypco(no) == istlice) then
-                   ! Output column is plain glacier (no MEC)
+                   ! This output column is plain glacier (no MEC)
                    ! Algorithm: Construct plain glacier output as
                    ! area-weighted average over all input MECs.
                    ! findMinDistCol() selection algorithm guarantees that
                    ! nearest input column is lowest elevation MEC of nearest
-                   ! glaciated landunit.
-                   ! An unknown number of higher elevation MECs from same
+                   ! glaciated landunit. Higher elevation MECs from same
                    ! landunit could (and likely do) follow the first MEC.
-                   ! Sanity check:
-                   if (ltypci(n) /= istlmec) then
-                      call abort()
-                   end if
 
                    ! Construct weighted output value in loop over input MEC landunit
-                   cwtci_sum=0.0_r8
-                   cwvvtci_sum=0.0_r8
-                   wvvci=0.0_r8
-                   mec_nbr=0
+                   cwtci_sum = 0.0_r8
+                   cwvvtci_sum = 0.0_r8
                    do while ( ltypci(n) == istlmec )
                       cwtci_sum = cwtci_sum + cwtci(n)
                       cwvvtci_sum = cwvvtci_sum + rbufsli(n) * cwtci(n)
                       n=n+1
-                      mec_nbr=mec_nbr+1
                    end do
-                   if (mec_nbr == 0) then
-                      call abort()
-                   end if
                    if (cwtci_sum > 0.0_r8) then
-                      wvvci=cwvvtci_sum/cwtci_sum
-                      rbufslo(no) = wvvci
-                   else
-                      call abort()
+                      rbufslo(no) = cwvvtci_sum / cwtci_sum
                    end if
                 end if
              end if
