@@ -89,12 +89,6 @@ module interpinic
   integer , allocatable, save :: ltypco(:)      ! Landunit type of column output
   real(r8), allocatable, save :: cwtci(:)       ! Column weight of column input
   
-#define DBG
-#ifdef DBG
-  integer, parameter :: n_dbg    = 977534 ! Input column index for debugging
-  integer, parameter :: no_dbg   = 730831 ! Output column index for debugging
-#endif /* !DBG */
-
   contains
 
   !=======================================================================
@@ -795,12 +789,8 @@ module interpinic
     write(6,*)'numpftso = ',numpftso,' numpfts= ',numpfts
     pftindx(:) = 0
     !$OMP PARALLEL DO PRIVATE (no,n,nmin,distmin,dx,dy,dist)
-#define DBG
-#ifdef DBG
-    do no = 1,1
-#else
     do no = 1,numpftso
-#endif /* !DBG */
+
        if (wto(no)>0.) then 
 
           nmin    = 0
@@ -897,11 +887,6 @@ module interpinic
     integer  :: varid   
     logical  :: calcmin
     integer  :: ret     
-#define DBG
-#ifdef DBG
-    write(6,*) 'DBG is on in findMinDistCols()'
-    call shr_sys_flush(6)
-#endif /* !DBG */
 
     ! --------------------------------------------------------------------
 
@@ -972,32 +957,18 @@ module interpinic
     write(6,*)'numcolso = ',numcolso
     colindx(:) = 0
     !$OMP PARALLEL DO PRIVATE (no,n,nmin,distmin,dx,dy,dist,calcmin)
-#ifdef DBG
-    do no = no_dbg,no_dbg
-#else
     do no = 1,numcolso
-#endif /* !DBG */
 
        if (wto(no) > 0.) then
 
           distmin = spval
           nmin    = 0
 
-#ifdef DBG
-          do n = n_dbg, n_dbg
-#else
           do n = 1, numcols
-#endif /* !DBG */
+
              calcmin = .false.
              if (wti(n) > 0.0_r8) then
-#if false
-                ! Original code
-                if (typei_col(n) == soilcol) then
-                   if (typei(n) == typeo(no)) calcmin = .true.
-                else
-                   if (typei(n) == typeo(no) .and. typei_col(n) == typeo_col(no)) calcmin = .true.
-                end if
-#else
+
                 ! New features to improve MEC->non-MEC interpolation
                 ! Input column is contender for nearest-to-output if...
                 if (typei_col(n) == soilcol) then
@@ -1020,7 +991,7 @@ module interpinic
                    if (typei(n) == typeo(no) .and. typei_col(n) == typeo_col(no)) calcmin = .true.
                 end if
              end if
-#endif                
+
              if (calcmin) then
                 dy = abs(lato(no)-lati(n))*re
                 dx = abs(lono(no)-loni(n))*re * 0.5_r8*(cos_lato(no)+cos_lati(n))
@@ -1034,15 +1005,6 @@ module interpinic
                    nmin = n
                 end if
              end if
-
-#ifdef DBG
-       if (no == no_dbg .and. n == n_dbg) then
-          write(6,*) 'no = ',no,' typeo = ',typeo(no),' typeo_col = ',typeo_col(no), &
-               ' lato = ',lato(no)/deg2rad,' lono = ',lono(no)/deg2rad,' wto = ',wto(no), &
-               ' n = ',n,' wti = ',wti(n),' typei(n) = ',typei(n),' typei_col(n) = ',typei_col(n), &
-               ' lati = ',lati(n)/deg2rad,' loni = ',loni(n)/deg2rad,' calcmin = ',calcmin,' distmin = ',distmin
-       end if
-#endif /* !DBG */
 
           end do
              
@@ -1073,12 +1035,6 @@ module interpinic
           ! Determine input column index (nmin) for the given output no value
           colindx(no) = nmin
        end if
-
-#ifdef DBG
-       if (no == no_dbg) then
-          write(6,*) 'no = ',no,' colindx = ',colindx(no)
-       end if
-#endif /* !DBG */
 
     end do
     !$OMP END PARALLEL DO
@@ -1187,12 +1143,7 @@ module interpinic
 
     lduindx(:) = 0
     !$OMP PARALLEL DO PRIVATE (no,n,nmin,distmin,dx,dy,dist)
-#define DBG
-#ifdef DBG
-    do no = 1,1
-#else
     do no = 1,numlduso
-#endif /* !DBG */
 
        if (wto(no) > 0.) then
           distmin = spval
@@ -1282,12 +1233,6 @@ module interpinic
     real(r8), allocatable :: cwvvtci_sum(:)     ! Cumulative weighted variable value of column input
     ! --------------------------------------------------------------------
 
-#define DBG
-#ifdef DBG
-    write(6,*) 'DBG is on in interp_ml_real()'
-    call shr_sys_flush(6)
-#endif /* !DBG */
-
     allocate (rbufmli(nlev,nvec))
     allocate (rbufmlo(nlev_o,nveco))
     allocate (wto(nveco))
@@ -1308,15 +1253,6 @@ module interpinic
 
     if (nlev == nlev_o) then
        if (nvec == numcols) then
-#if false
-          ! Original code
-          do no = 1, nveco
-             if (wto(no)>0._r8) then
-                n = colindx(no)
-                if (n > 0) rbufmlo(:,no) = rbufmli(:,n)
-             end if
-          end do
-#else
           ! New features to improve MEC->non-MEC interpolation
           ! Following section is vectorized version of analogous section in interp_sl_real()
           ! See explanatory comments in interp_sl_real() 
@@ -1328,11 +1264,7 @@ module interpinic
                 end if
              end do
           else if (nlevmec > 0) then
-#ifdef DBG
-             do no = no_dbg, no_dbg
-#else
              do no = 1, nveco
-#endif /* !DBG */
                 if (wto(no)>0._r8) then
                    n = colindx(no)
                    if (n > 0) rbufmlo(:,no) = rbufmli(:,n)
@@ -1351,7 +1283,6 @@ module interpinic
                 end if
              end do
           end if
-#endif
        else if (nvec == numpfts) then
           do no = 1, nveco
              if (wto(no)>0._r8) then
@@ -1444,12 +1375,6 @@ module interpinic
     real(r8) :: cwvvtci_sum                ! Cumulative weighted variable value of column input
     ! --------------------------------------------------------------------
 
-#define DBG
-#ifdef DBG
-    write(6,*) 'DBG is on in interp_sl_real()'
-    call shr_sys_flush(6)
-#endif /* !DBG */
-
     allocate (rbufsli(nvec))
     allocate (rbufslo(nveco))
     allocate (wto(nveco))
@@ -1490,15 +1415,6 @@ module interpinic
 
     if ( nvec == numcols )then
 
-#if false
-       ! Original code
-       do no = 1, nveco
-          if (wto(no)>0._r8) then
-             n = colindx(no)
-             if (n > 0) rbufslo(no) = rbufsli(n)
-          end if
-       end do
-#else
        if (nlevmec == nlevmec_o) then
           ! Both files either lack MECs or contain the same number of MECs
           ! Either way, apply default nearest-neighbor algorithm
@@ -1516,11 +1432,7 @@ module interpinic
 
           ! Input file contains MECs and output does not
           ! Nearest-neighbor algorithm depends on column-type
-#ifdef DBG
-          do no = no_dbg, no_dbg
-#else
           do no = 1, nveco
-#endif /* !DBG */
              if (wto(no)>0._r8) then
                 n = colindx(no)
                 ! Initialize output with default nearest neighbor algorithm
@@ -1551,28 +1463,14 @@ module interpinic
                 end if
              end if ! if (wto(no)>0._r8) then
 
-#ifdef DBG
-             if (no == no_dbg) then
-                write(6,*) 'varname = ',trim(varname), &
-                     ' no = ',no,' wto = ',wto(no),' ltypco = ',ltypco(no), &
-                     ' n = ',n,' ltypci = ',ltypci(n), &
-                     ' rbufslo = ',rbufslo(no),' rbufsli = ',rbufsli(n)
-             end if
-#endif /* !DBG */
-
           end do ! do no = 1, nveco
 
        end if ! else if (nlevmec > 0) then
 
-#endif       
-
     else if ( nvec == numldus )then
 
-#ifdef DBG
-       do no = 1,1
-#else
        do no = 1, nveco
-#endif /* !DBG */
+
           if (wto(no)>0._r8) then
              n = lduindx(no)
              if ( shr_infnan_isnan(rbufsli(n)) ) then
@@ -1584,11 +1482,8 @@ module interpinic
 
     else if ( nvec == numpfts )then
 
-#ifdef DBG
-       do no = 1,1
-#else
        do no = 1, nveco
-#endif /* !DBG */
+
           if (wto(no)>0._r8) then
              !
              ! If variable-name is htop or fpcgrid
